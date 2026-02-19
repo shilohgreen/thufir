@@ -5,7 +5,6 @@ Deploy to Google Cloud Run as a containerized service.
 """
 from __future__ import annotations
 
-import os
 import traceback
 
 from fastapi import FastAPI, HTTPException
@@ -14,7 +13,7 @@ from pydantic import BaseModel, Field
 from agent.config import DEFAULT_ENDPOINT, DEFAULT_MODEL, DEFAULT_API_KEY
 from agent.thufir import run_agent
 
-app = FastAPI(title="Thufir", description="Supabase data-retrieval agent API")
+app = FastAPI(title="Thufir", description="Readonly data-retrieval agent API")
 
 
 # ── Request / Response models ─────────────────────────────────────────────────
@@ -59,4 +58,3 @@ async def run(req: RunRequest):
     except Exception as e:
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
-

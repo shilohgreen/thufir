@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-thufir.py — CLI entrypoint for the Supabase data-retrieval agent.
+thufir.py — CLI entrypoint for the data-retrieval agent.
 
 Usage:
     python thufir.py --prompt "How many users signed up this week?"
@@ -13,7 +13,7 @@ import sys
 
 from agent.config import DEFAULT_ENDPOINT, DEFAULT_MODEL, DEFAULT_API_KEY
 from agent.agent import DataAgent
-from agent.supabase_client import get_client, list_tables, execute_query, execute_rpc
+from agent.postgres_client import get_pool, list_tables, execute_sql
 
 
 # ── Main loop ────────────────────────────────────────────────────────────────
@@ -26,80 +26,77 @@ async def run_agent(
     max_steps: int = 10,
 ):
     agent = DataAgent(endpoint, model, api_key)
-    client = get_client()
+    pool = await get_pool()
 
-    # Fetch schema info so the agent knows what tables are available
-    schema_info = await list_tables(client)
+    try:
+        # Fetch schema info so the agent knows what tables are available
+        schema_info = await list_tables(pool)
 
-    print(f"\n{'═'*60}")
-    print(f"  Available Schema")
-    print(f"{'═'*60}\n")
-    print(schema_info)
-    print(f"\n{'═'*60}\n")
+        print(f"\n{'═'*60}")
+        print(f"  Available Schema")
+        print(f"{'═'*60}\n")
+        print(schema_info)
+        print(f"\n{'═'*60}\n")
 
-    for step in range(1, max_steps + 1):
-        user_msg = (
-            f"GOAL: {prompt}\n\n"
-            f"Available tables/columns:\n{schema_info}"
-        )
+        for step in range(1, max_steps + 1):
+            user_msg = (
+                f"GOAL: {prompt}\n\n"
+                f"Available tables/columns:\n{schema_info}"
+            )
 
-        # After the first step, include the query results
-        if step > 1:
-            user_msg = f"GOAL: {prompt}\n\nPrevious query returned data. Decide what to do next."
+            # After the first step, include the query results
+            if step > 1:
+                user_msg = f"GOAL: {prompt}\n\nPrevious query returned data. Decide what to do next."
 
-        print(f"\n{'─'*60}")
-        print(f"  Step {step}/{max_steps}")
+            print(f"\n{'─'*60}")
+            print(f"  Step {step}/{max_steps}")
 
-        raw = agent.chat(user_msg)
+            raw = agent.chat(user_msg)
 
-        action = agent.parse_action(raw)
-        if action is None:
-            print(f"  ⚠️  Could not parse action:\n{raw[:300]}")
-            continue
+            action = agent.parse_action(raw)
+            if action is None:
+                print(f"  ⚠️  Could not parse action:\n{raw[:300]}")
+                continue
 
-        act = action.get("action")
-        reason = action.get("reason", "")
-        print(f"  Action: {act}  —  {reason}")
+            act = action.get("action")
+            reason = action.get("reason", "")
+            print(f"  Action: {act}  —  {reason}")
 
-        try:
-            if act == "answer":
-                result = action.get("text", "")
-                print(f"\n{'═'*60}")
-                print(f"  ✅  AGENT ANSWER:\n\n{result}")
-                print(f"{'═'*60}\n")
-                return result
+            try:
+                if act == "answer":
+                    result = action.get("text", "")
+                    print(f"\n{'═'*60}")
+                    print(f"  ✅  AGENT ANSWER:\n\n{result}")
+                    print(f"{'═'*60}\n")
+                    return result
 
-            elif act == "query":
-                data = await execute_query(client, action)
-                print(f"  📊  Query returned {len(data)} chars of data")
-                agent.history.append(
-                    {"role": "user", "content": f"Query result:\n{data}"}
-                )
+                elif act == "sql":
+                    data = await execute_sql(pool, action)
+                    print(f"  📊  Query returned {len(data)} chars of data")
+                    agent.history.append(
+                        {"role": "user", "content": f"Query result:\n{data}"}
+                    )
 
-            elif act == "rpc":
-                data = await execute_rpc(client, action)
-                print(f"  📊  RPC returned {len(data)} chars of data")
-                agent.history.append(
-                    {"role": "user", "content": f"RPC result:\n{data}"}
-                )
+                else:
+                    print(f"  ⚠️  Unknown action: {act}")
 
-            else:
-                print(f"  ⚠️  Unknown action: {act}")
+            except Exception as e:
+                err_msg = f"Action '{act}' failed: {e}"
+                print(f"  ❌  {err_msg}")
+                agent.add_error(err_msg)
 
-        except Exception as e:
-            err_msg = f"Action '{act}' failed: {e}"
-            print(f"  ❌  {err_msg}")
-            agent.add_error(err_msg)
+        print(f"\n⚠️  Reached max steps ({max_steps}) without an answer.")
+        return None
 
-    print(f"\n⚠️  Reached max steps ({max_steps}) without an answer.")
-    return None
+    finally:
+        await pool.close()
 
 
 # ── CLI ──────────────────────────────────────────────────────────────────────
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Supabase data-retrieval agent powered by an OpenAI-compatible LLM."
+        description="Data-retrieval agent powered by an OpenAI-compatible LLM."
     )
     parser.add_argument("--prompt", required=True, help="Goal / task for the agent")
     parser.add_argument(
@@ -131,4 +128,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

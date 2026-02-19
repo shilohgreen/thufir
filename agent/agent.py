@@ -59,4 +59,3 @@ class DataAgent:
             except json.JSONDecodeError:
                 pass
         return None
-

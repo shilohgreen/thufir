@@ -1,20 +1,22 @@
 # THUFIR
 
-Thufir is a readonly data-retrieval agent that queries a Supabase database
+Thufir is a readonly data-retrieval agent that queries a PostgreSQL database
 using an OpenAI-compatible LLM.
 
 Ask it a question in natural language and it figures out which tables to query,
-applies filters, and returns a synthesized answer. It never writes data.
+writes SQL, and returns a synthesized answer. It never writes data.
+
+Works with any Postgres instance — including Supabase (just use the direct connection string).
 
 ## Architecture
 
 ```
 thufir/
-├── agent/               ← Supabase data-retrieval agent (Cloud Run, port 8080)
+├── agent/               ← Data-retrieval agent (Cloud Run, port 8080)
 │   ├── agent.py         — DataAgent: LLM chat loop with retry + JSON parsing
 │   ├── api.py           — FastAPI with /health and /run endpoints
 │   ├── config.py        — env vars + system prompt
-│   ├── supabase_client.py — readonly Supabase client (query, rpc, schema)
+│   ├── postgres_client.py — readonly Postgres client (SQL exec, schema discovery)
 │   └── thufir.py        — CLI entrypoint + agent loop
 ├── slack/               ← Slack bot (Cloud Run, port 3000)
 │   ├── app.py           — Bolt + FastAPI (HTTP mode)
@@ -28,29 +30,6 @@ thufir/
 
 ## Setup
 
-### Prerequisites
-
-- Python 3.12+
-- [uv](https://docs.astral.sh/uv/)
-- A Supabase project with an `anon` or `service_role` key
-- (Optional) A `get_schema_info` RPC function in Supabase so the agent can discover tables
-
-### Install dependencies
-
-**Agent:**
-
-```bash
-cd agent
-uv sync
-```
-
-**Slack bot:**
-
-```bash
-cd slack
-uv sync
-```
-
 ### Environment variables
 
 Create a `.env` in the project root:
@@ -59,9 +38,8 @@ Create a `.env` in the project root:
 # LLM
 GEMINI_API_KEY=your-gemini-key
 
-# Supabase (readonly)
-SUPABASE_URL=https://xxx.supabase.co
-SUPABASE_KEY=eyJ...
+# Postgres (any instance — including Supabase)
+DATABASE_URL=postgresql://user:pass@host:5432/dbname
 
 # Slack (only needed for the slack bot)
 SLACK_BOT_TOKEN=xoxb-...
@@ -69,36 +47,20 @@ SLACK_SIGNING_SECRET=...
 THUFIR_API_URL=http://localhost:8080
 ```
 
+For **Supabase**, grab the connection string from:
+Project Settings → Database → Connection string → URI
+
+### Recommended: create a readonly role
+
+```sql
+CREATE ROLE thufir_reader WITH LOGIN PASSWORD 'some-password';
+GRANT SELECT ON ALL TABLES IN SCHEMA public TO thufir_reader;
+ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT ON TABLES TO thufir_reader;
+```
+
+Then use that role in `DATABASE_URL`. Even if the SQL validation is bypassed, Postgres itself will reject writes.
+
 ## Usage
-
-### CLI
-
-```bash
-cd agent
-uv run python -m agent.thufir --prompt "How many users signed up this week?"
-```
-
-### API server (local)
-
-```bash
-cd agent
-uv run uvicorn agent.api:app --host 0.0.0.0 --port 8080
-```
-
-Then call it:
-
-```bash
-curl -X POST http://localhost:8080/run \
-  -H "Content-Type: application/json" \
-  -d '{"prompt": "How many users signed up this week?"}'
-```
-
-### Slack bot (local)
-
-```bash
-cd slack
-uv run uvicorn slack.app:fastapi_app --host 0.0.0.0 --port 3000
-```
 
 ### Docker
 
@@ -116,15 +78,26 @@ docker build -f Dockerfile.slack -t thufir-slack .
 docker run -p 3000:3000 --env-file .env thufir-slack
 ```
 
-## Agent actions
+### API
 
-The LLM can perform three actions per turn:
+```bash
+curl -X POST http://localhost:8080/run \
+  -H "Content-Type: application/json" \
+  -d '{"prompt": "How many users signed up this week?"}'
+```
+
+## Agent actions
 
 | Action | Description |
 |---|---|
-| `query` | SELECT from a table with optional filters (`eq`, `neq`, `gt`, `gte`, `lt`, `lte`, `like`, `ilike`, `in`, `is`) and a limit |
-| `rpc` | Call a readonly Supabase RPC function with params |
-| `answer` | Return a final synthesized answer to the user |
+| `sql` | Run a readonly `SELECT` query (write statements are blocked at app level + db level) |
+| `answer` | Return a final synthesized answer |
+
+Queries are validated before execution — only `SELECT` and `WITH` (CTE) statements are allowed.
+
+## Schema discovery
+
+The agent automatically queries `information_schema.columns` on every run to discover all public tables and columns. No setup or migrations needed.
 
 ## Slack commands
 
@@ -133,33 +106,3 @@ The LLM can perform three actions per turn:
 | `/thufir <prompt>` | `/thufir How many active users do we have?` |
 | `@thufir <prompt>` | `@thufir Show me the top 5 products by revenue` |
 | DM the bot | Just message it directly |
-
-## Supabase schema discovery
-
-The agent calls a `get_schema_info` RPC on startup to learn what tables and columns
-are available. Create it in Supabase SQL editor:
-
-```sql
-create or replace function get_schema_info()
-returns json
-language sql
-security definer
-as $$
-  select json_agg(row_to_json(t))
-  from (
-    select
-      table_name,
-      json_agg(json_build_object(
-        'column', column_name,
-        'type', data_type
-      )) as columns
-    from information_schema.columns
-    where table_schema = 'public'
-    group by table_name
-    order by table_name
-  ) t;
-$$;
-```
-
-If this RPC doesn't exist, the agent will still work — it just won't auto-discover
-the schema and you'll need to tell it which tables to query in your prompt.
