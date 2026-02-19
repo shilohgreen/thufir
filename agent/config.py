@@ -11,11 +11,11 @@ load_dotenv()
 
 DEFAULT_ENDPOINT = "https://generativelanguage.googleapis.com/v1beta/openai"
 DEFAULT_MODEL = "gemini-2.0-flash"
-DEFAULT_API_KEY = os.getenv("GEMINI_API_KEY", "no-key")
+DEFAULT_API_KEY = os.getenv("GEMINI_API_KEY")
 
 # ── Postgres ──────────────────────────────────────────────────────────────────
 
-DATABASE_URL = os.getenv("DATABASE_URL", "")  # e.g. postgresql://user:pass@host:5432/db
+DATABASE_URL = os.getenv("DATABASE_URL")  # e.g. postgresql://user:pass@host:5432/db
 
 # ── Constants ────────────────────────────────────────────────────────────────
 
@@ -24,7 +24,7 @@ MAX_RESULT_CHARS = 48_000
 # ── System prompt ────────────────────────────────────────────────────────────
 
 SYSTEM_PROMPT = textwrap.dedent("""\
-You are thufir data-retrieval agent. You have READONLY access to a PostgreSQL database.
+You are thufir, a data-retrieval agent. You have READONLY access to a PostgreSQL database.
 
 You are given:
 1. A user GOAL that you must accomplish.
