@@ -8,6 +8,40 @@ writes SQL, and returns a synthesized answer. It never writes data.
 
 Works with any Postgres instance — including Supabase (just use the direct connection string).
 
+## How it works
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                         THUFIR AGENT                            │
+│                                                                 │
+│  ┌───────────┐    ┌──────────────┐    ┌─────────────────────┐   │
+│  │  FastAPI   │───▶│  Agent Loop  │───▶│   LLM (Gemini /     │   │
+│  │  /run      │    │  (thufir.py) │◀───│   OpenAI-compat)    │   │
+│  └───────────┘    └──────┬───────┘    └─────────────────────┘   │
+│                          │                                      │
+│                          │ {"action":"sql",                     │
+│                          │  "query":"SELECT …"}                 │
+│                          ▼                                      │
+│                   ┌──────────────┐                               │
+│                   │  Validate    │  regex block writes           │
+│                   │  readonly    │  must start with SELECT/WITH  │
+│                   └──────┬───────┘                               │
+│                          │                                      │
+│                          ▼                                      │
+│                   ┌──────────────┐                               │
+│                   │  asyncpg     │──▶  PostgreSQL / Supabase     │
+│                   │  execute     │◀──  (readonly results)        │
+│                   └──────────────┘                               │
+│                                                                 │
+│  Results fed back into LLM history until "answer" action        │
+└─────────────────────────────────────────────────────────────────┘
+
+         ┌────────────┐         ┌──────────────┐
+         │  Slack Bot  │──HTTP──▶│  /run endpoint │
+         │  @thufir   │◀────────│  (agent API)   │
+         └────────────┘         └──────────────┘
+```
+
 ## Architecture
 
 ```
